@@ -2,147 +2,210 @@
 #include "simpletools.h"
 #include "abdrive.h"   
 
-#define CYCLES_PER_MS       100
-#define HB_MAX              CYCLES_PER_MS * 10
-#define PIN_HB              26
-#define PIN_SENSE           27
+//#define _debug
 
-#define PIN_RIGHT_ENCODER   7 // 15
-#define PIN_LEFT_ENCODER    6 // 14
-#define PIN_PING            2 // 10
-#define PIN_CNY_1           1 // 9
-#define PIN_CNY_0           0 // 8
-#define IN_MAX              8
+#define CYCLES_PER_MS   100
+#define HB_MAX          CYCLES_PER_MS * 10
+#define LED_HB          26
+#define LED_1           27
 
-#define COGS_MAX            8
+#define PIN_R_ENCODER   7 // 15
+#define PIN_L_ENCODER   6 // 14
+
+#define IN_MAX          3
+#define COGS_MAX        8
+
+#define DELAY           400
+#define SPEED           50
+
+enum Pins
+{
+    PIN_Q_L,
+    PIN_Q_C,
+    PIN_Q_R,
+    PIN_Q_3,
+    PIN_Q_4,
+    PIN_Q_5,
+    PIN_Q_6,
+    PIN_Q_7,
+    PIN_PING
+};
+
 
 typedef enum
 {
+    ST_DECIDE,
     ST_MOVE,
     ST_OVER_LINE
 } State;
 
 typedef enum
 {
-    MV_FORWARDS,
-    MV_BACKWARDS
-} Move;
+    MV_LEFT,
+    MV_RIGHT,
+    MV_REVERSE,
+    MV_FORWARD
+} MoveSt;
 
-void Init();
-void CheckInputs(void* data);
-
-void Process_Move(void* data);
-void Process_OverLine(void* data);
-
-void Move_Toggle(void* data);
-void doHeartBeat(void);
-
-uint32_t heartBeatCount = 0U;
-uint8_t heartBeatLast = 0U;
 
 int* cog[COGS_MAX];
-uint8_t inPins[] = {8, 9, 10, 11, 12, 13, 14, 15};
+uint8_t inPins[] = {0, 1, 2, 3, 4, 5, 6, 7};
 volatile uint8_t inputs[IN_MAX];
 
 volatile State state = ST_MOVE;
-volatile Move lastMove = MV_FORWARDS;
+volatile MoveSt moveState = MV_FORWARD;
 
-typedef void(*ProcessCB)(void* data);
-ProcessCB Process[] = {Process_Move, Process_OverLine};
+uint32_t hbCount = 0U;
+uint8_t hbLast = 0U;
 
 void(*Toggle[])(int pin) = {low, high};
 
+void Robot_Init(void);
+void Robot_CheckInputs(void* data);
+void Robot_HeartBeat(void);
+
+void Process_DecideMove(void* data);
+void Process_Move(void* data);
+void Process_OverLine(void* data);
+
+void Move_Left(void* data);
+void Move_Right(void* data);
+void Move_Reverse(void* data);
+
+typedef void(*ProcessCB)(void* data);
+ProcessCB Robot_Process[] = {Process_DecideMove, Process_Move, Process_OverLine};
+ProcessCB Move[] = {Move_Left, Move_Right, Move_Reverse};
+
 int main(void)
 {
-    state = ST_MOVE;
+    state = ST_DECIDE;
 
     //cog[0] = cog_run(Process_CheckInputs, 128);
     //cog[1] = cog_run(Process_Move, 128);
     //cog[2] = cog_run(Move_Toggle, 128);
 
-    Init();
+    Robot_Init();
 
     while(1)
     {
-        CheckInputs(0);
-        Process[state](0);
+        Robot_CheckInputs(0);
+        Robot_Process[state](0);
 
-        doHeartBeat();
+        //Robot_HeartBeat();
     }
     return 0;
 }
 
-void Init(void* data)
+void Robot_Init(void)
 {
     pause(8000);
-    drive_speed(64, 64);
-    /* high(PIN_SENSE); */
-    /* low(PIN_HB); */
+    drive_speed(SPEED, SPEED);
 }
 
-void CheckInputs(void* data)
+void Robot_CheckInputs(void* data)
 {
     uint8_t i;
     for(i = 0; i < IN_MAX; ++i)
     {
         inputs[i] = input(inPins[i]);
     }
-    
-    /* Toggle[inputs[PIN_CNY_0]](PIN_SENSE); */
-    /* Toggle[inputs[PIN_CNY_1]](PIN_HB); */
-    //state = ST_MOVE;
+}
+
+void Process_DecideMove(void* data)
+{
+#ifdef _debug
+    if(inputs[PIN_Q_L] && inputs[PIN_Q_C] && !(inputs[PIN_Q_R]))
+#else
+    if(!(inputs[PIN_Q_L]) && !(inputs[PIN_Q_C]) && inputs[PIN_Q_R])
+#endif
+    {
+        moveState= MV_RIGHT;
+        state = ST_MOVE;
+    }
+#ifdef _debug
+    else if(inputs[PIN_Q_R] && inputs[PIN_Q_C] &&!(inputs[PIN_Q_L]))
+#else
+    else if(!(inputs[PIN_Q_R]) && !(inputs[PIN_Q_C]) && inputs[PIN_Q_L])
+#endif
+    {
+        moveState = MV_LEFT;
+        state = ST_MOVE;
+    }
+#ifdef _debug
+    else if(inputs[PIN_Q_R] && inputs[PIN_Q_C] && inputs[PIN_Q_L])
+#else
+    else if(!(inputs[PIN_Q_R]) && !(inputs[PIN_Q_C]) && !(inputs[PIN_Q_L]))
+#endif
+    {
+        moveState = MV_REVERSE;
+        state = ST_MOVE;
+    }
+    else
+    {
+        state = ST_DECIDE;
+    }
 }
 
 void Process_Move(void* data)
 {
-    if(!(inputs[PIN_CNY_0]) && !(inputs[PIN_CNY_1]))
-    {
-        Move_Toggle(0);
-    }
+    Move[moveState](0);
 }
 
-void Move_Toggle(void* data)
+void Move_Left(void* data)
 {
-    if(MV_BACKWARDS == lastMove)
-    {
-        drive_speed(64, 64);
-        /* high(PIN_SENSE); */
-        /* low(PIN_HB); */
-        lastMove = MV_FORWARDS;
-    }
-    else
-    {
-        drive_speed(-64, -64);
-        /* low(PIN_SENSE); */
-        /* high(PIN_HB); */
-        lastMove = MV_BACKWARDS;
-    }
+    drive_speed(SPEED, -SPEED);
+    pause(DELAY);
+    drive_speed(SPEED, SPEED);
+    high(LED_HB);
+    low(LED_1);
+    state = ST_OVER_LINE;
+}
 
+void Move_Right(void* data)
+{
+    drive_speed(-SPEED, SPEED);
+    pause(DELAY);
+    drive_speed(SPEED, SPEED);
+    high(LED_1);
+    low(LED_HB);
+    state = ST_OVER_LINE;
+}
+
+void Move_Reverse(void *data)
+{
+    drive_speed(-8, -SPEED);
+    pause(DELAY);
+    drive_speed(SPEED, SPEED);
+    high(LED_HB);
+    high(LED_1);
     state = ST_OVER_LINE;
 }
 
 void Process_OverLine(void* data)
 {
-    if(inputs[PIN_CNY_0] && inputs[PIN_CNY_1])
+#ifdef _debug
+    if(!(inputs[PIN_Q_L]) && !(inputs[PIN_Q_C]) && !(inputs[PIN_Q_R]))
+#else
+    if(inputs[PIN_Q_L] && inputs[PIN_Q_C] && inputs[PIN_Q_R])
+#endif
     {
-        high(PIN_SENSE);
-        state = ST_MOVE;
+        /* high(LED_1); */
+        state = ST_DECIDE;
     }
     else
     {
-        low(PIN_SENSE);
+        /* low(LED_1); */
         state = ST_OVER_LINE;
     }
 }
 
-void doHeartBeat(void)
+void Robot_HeartBeat(void)
 {
-    heartBeatCount++;
-    if (heartBeatCount > HB_MAX)
+    ++hbCount;
+    if (hbCount > HB_MAX)
     {
-        // toogle
-        heartBeatLast ^= 1U;
-        Toggle[heartBeatLast](PIN_HB);
-        heartBeatCount = 0;
+        hbLast ^= 1U;
+        Toggle[hbLast](LED_HB);
+        hbCount = 0;
     }
 }
